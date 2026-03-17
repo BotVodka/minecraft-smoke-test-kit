@@ -1,0 +1,17 @@
+package __BASE_PACKAGE__.smoketest;
+
+import __BASE_PACKAGE__.__MOD_CLASS__;
+import net.minecraftforge.event.server.ServerStartedEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+
+@Mod.EventBusSubscriber(modid = __MOD_CLASS__.MODID)
+public final class ServerSmokeTestHooks {
+    private ServerSmokeTestHooks() {
+    }
+
+    @SubscribeEvent
+    public static void onServerStarted(final ServerStartedEvent event) {
+        SmokeTestMarkers.logSuccess("server");
+    }
+}

@@ -1,0 +1,20 @@
+package __BASE_PACKAGE__.smoketest;
+
+import com.mojang.logging.LogUtils;
+import org.slf4j.Logger;
+
+public final class SmokeTestMarkers {
+    public static final String SUCCESS_PREFIX = "[MC_SMOKE_OK]";
+    private static final Logger LOGGER = LogUtils.getLogger();
+
+    private SmokeTestMarkers() {
+    }
+
+    public static String successMarker(final String side) {
+        return SUCCESS_PREFIX + " side=" + side;
+    }
+
+    public static void logSuccess(final String side) {
+        LOGGER.info("{}", successMarker(side));
+    }
+}
