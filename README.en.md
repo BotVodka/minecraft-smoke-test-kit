@@ -32,6 +32,7 @@ This toolkit standardizes the workflow with a simple contract:
 These files are expected to be directly reusable across projects:
 
 - `scripts/mc_smoke_test.py`
+- `scripts/install_forge_smoke_test.py`
 - `commands/claude/trellis/smoke-test.md`
 - `commands/cursor/trellis-smoke-test.md`
 
@@ -45,7 +46,25 @@ These files depend on the target project structure and should remain templated:
 
 ## Quick start
 
-### 1. Copy the orchestration script
+### 1. Use the installer script
+
+Recommended approach:
+
+```bash
+python3 ./scripts/install_forge_smoke_test.py \
+  --target-project "/absolute/path/to/your-project" \
+  --base-package "com.example.mymod" \
+  --mod-class "MyMod"
+```
+
+This script installs:
+
+- `./.trellis/scripts/mc_smoke_test.py`
+- `.claude/commands/trellis/smoke-test.md`
+- `.cursor/commands/trellis-smoke-test.md`
+- Forge smoke-test helper Java files
+
+### 2. Manually copy the orchestration script
 
 Copy:
 
@@ -59,14 +78,14 @@ into your target project, for example:
 ./.trellis/scripts/mc_smoke_test.py
 ```
 
-### 2. Copy the command templates
+### 3. Manually copy the command templates
 
 - Claude Code / Trellis:
   - `commands/claude/trellis/smoke-test.md`
 - Cursor:
   - `commands/cursor/trellis-smoke-test.md`
 
-### 3. Install the Forge helper templates
+### 4. Manually install the Forge helper templates
 
 Copy the Forge helper templates into your target project and replace:
 
@@ -82,7 +101,7 @@ src/main/java/<base-package>/smoketest/
 src/main/java/<base-package>/smoketest/client/
 ```
 
-### 4. Run smoke tests
+### 5. Run smoke tests
 
 Server:
 

@@ -32,6 +32,7 @@
 这些文件原则上可以跨项目直接复用：
 
 - `scripts/mc_smoke_test.py`
+- `scripts/install_forge_smoke_test.py`
 - `commands/claude/trellis/smoke-test.md`
 - `commands/cursor/trellis-smoke-test.md`
 
@@ -45,7 +46,25 @@
 
 ## 快速开始
 
-### 1. 复制 orchestration 脚本
+### 1. 使用安装脚本
+
+推荐直接运行安装脚本：
+
+```bash
+python3 ./scripts/install_forge_smoke_test.py \
+  --target-project "/absolute/path/to/your-project" \
+  --base-package "com.example.mymod" \
+  --mod-class "MyMod"
+```
+
+该脚本会自动复制：
+
+- `./.trellis/scripts/mc_smoke_test.py`
+- `.claude/commands/trellis/smoke-test.md`
+- `.cursor/commands/trellis-smoke-test.md`
+- Forge smoke-test helper Java 文件
+
+### 2. 手动复制 orchestration 脚本
 
 将：
 
@@ -59,14 +78,14 @@ scripts/mc_smoke_test.py
 ./.trellis/scripts/mc_smoke_test.py
 ```
 
-### 2. 复制命令模板
+### 3. 手动复制命令模板
 
 - Claude Code / Trellis:
   - `commands/claude/trellis/smoke-test.md`
 - Cursor:
   - `commands/cursor/trellis-smoke-test.md`
 
-### 3. 接入 Forge helper 模板
+### 4. 手动接入 Forge helper 模板
 
 将 Forge helper 模板复制到目标项目，并替换：
 
@@ -82,7 +101,7 @@ src/main/java/<base-package>/smoketest/
 src/main/java/<base-package>/smoketest/client/
 ```
 
-### 4. 运行 smoke test
+### 5. 运行 smoke test
 
 服务端：
 
