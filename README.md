@@ -1,5 +1,9 @@
 # Minecraft Smoke Test Kit
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![README: 中文](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue.svg)](./README.md)
+[![README: English](https://img.shields.io/badge/README-English-blue.svg)](./README.en.md)
+
 一个面向 Minecraft Mod 开发的可复用 smoke-test 工具包。
 
 它的目标是让 AI agent 在执行 `runServer` / `runClient` 后，等待显式启动成功 marker，并在确认成功启动后自动结束进程，不再要求人工关闭客户端窗口或在服务端控制台输入 `stop`。

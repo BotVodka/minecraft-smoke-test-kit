@@ -1,5 +1,9 @@
 # Minecraft Smoke Test Kit
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![README: 中文](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue.svg)](./README.md)
+[![README: English](https://img.shields.io/badge/README-English-blue.svg)](./README.en.md)
+
 A reusable smoke-test toolkit for Minecraft mod development.
 
 It allows an AI agent to run `runServer` / `runClient`, wait for an explicit startup success marker, and stop the process automatically after successful startup — without requiring a human to close the client window or type `stop` into the server console.
