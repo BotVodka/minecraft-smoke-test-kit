@@ -1,5 +1,7 @@
 # Minecraft Smoke Test Kit
 
+本项目由 BotVodka 使用 Claude Code 与 GPT-5.4 编写。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![README: 中文](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-blue.svg)](./README.md)
 [![README: English](https://img.shields.io/badge/README-English-blue.svg)](./README.en.md)
@@ -33,7 +35,7 @@
 
 - `scripts/mc_smoke_test.py`
 - `scripts/install_forge_smoke_test.py`
-- `commands/claude/trellis/smoke-test.md`
+- 全局 Claude command（建议放在 `~/.claude/commands/` 下）
 - `commands/cursor/trellis-smoke-test.md`
 
 ### 适配层
@@ -46,9 +48,83 @@
 
 ## 快速开始
 
-### 1. 使用安装脚本
+### 模式 1：全局 Claude 模式（推荐）
 
-推荐直接运行安装脚本：
+这是当前推荐的跨项目持久化方案：
+
+- 全局 command 作为唯一入口
+- 本仓库的 `scripts/mc_smoke_test.py` 作为中央 orchestration 实现
+- 目标项目内只安装必须参与编译的 helper Java 文件
+
+#### 1. 配置全局仓库根路径
+
+在 Claude 全局 settings 中配置：
+
+```json
+{
+  "env": {
+    "MC_SMOKE_TEST_KIT_ROOT": "D:/projects/code/minecraft-smoke-test-kit"
+  }
+}
+```
+
+#### 2. 为已验证环境安装 helper
+
+当前唯一已验证环境是 Forge 1.20.1，可使用 helpers-only / global-mode 安装：
+
+```bash
+python3 ./scripts/install_forge_smoke_test.py \
+  --target-project "/absolute/path/to/your-project" \
+  --base-package "com.example.mymod" \
+  --mod-class "MyMod" \
+  --global-mode
+```
+
+这一路径只安装：
+
+- Forge smoke-test helper Java 文件
+
+不会复制：
+
+- `./.trellis/scripts/mc_smoke_test.py`
+- `.claude/commands/...`
+- `.cursor/commands/...`
+
+#### 3. 通过中央脚本执行 smoke test
+
+服务端：
+
+```bash
+python3 "D:/projects/code/minecraft-smoke-test-kit/scripts/mc_smoke_test.py" \
+  --project-root "/absolute/path/to/your-project" \
+  --task runServer \
+  --side server \
+  --bootstrap-helper
+```
+
+客户端：
+
+```bash
+python3 "D:/projects/code/minecraft-smoke-test-kit/scripts/mc_smoke_test.py" \
+  --project-root "/absolute/path/to/your-project" \
+  --task runClient \
+  --side client \
+  --bootstrap-helper
+```
+
+#### 4. 未知环境走 helper generation 路径
+
+如果目标项目不是当前已验证的 Forge 1.20.1，不要直接套用现成 Forge 模板。
+
+改为使用预设 prompt 先生成最小 helper，见：
+
+- `docs/helper-generation-prompt.md`
+
+### 模式 2：项目内复制模式（兼容旧方式）
+
+如果你不使用全局 Claude command，仍可沿用项目内复制模式。
+
+#### 1. 使用完整安装脚本
 
 ```bash
 python3 ./scripts/install_forge_smoke_test.py \
@@ -64,7 +140,7 @@ python3 ./scripts/install_forge_smoke_test.py \
 - `.cursor/commands/trellis-smoke-test.md`
 - Forge smoke-test helper Java 文件
 
-### 2. 手动复制 orchestration 脚本
+#### 2. 手动复制 orchestration 脚本
 
 将：
 
@@ -78,20 +154,19 @@ scripts/mc_smoke_test.py
 ./.trellis/scripts/mc_smoke_test.py
 ```
 
-### 3. 手动复制命令模板
+#### 3. 手动复制命令模板
 
 - Claude Code / Trellis:
   - `commands/claude/trellis/smoke-test.md`
 - Cursor:
   - `commands/cursor/trellis-smoke-test.md`
 
-### 4. 手动接入 Forge helper 模板
+#### 4. 手动接入 Forge helper 模板
 
 将 Forge helper 模板复制到目标项目，并替换：
 
 - `__BASE_PACKAGE__`
 - `__BASE_PACKAGE_PATH__`
-- `__MOD_ID__`
 - `__MOD_CLASS__`
 
 推荐目标目录：
@@ -101,7 +176,7 @@ src/main/java/<base-package>/smoketest/
 src/main/java/<base-package>/smoketest/client/
 ```
 
-### 5. 运行 smoke test
+#### 5. 运行 smoke test
 
 服务端：
 
@@ -188,7 +263,14 @@ minecraft-smoke-test-kit/
 - 保持命令参数命名不变
 - 只替换 loader-specific helper 实现
 
-这意味着未来支持 NeoForge / Fabric 时，优先新增 helper 模板，而不是重写 orchestration 层。
+但在全局 Claude MVP 中，不在全局层硬编码 NeoForge / Fabric 等兼容实现。
+
+当前策略分两层：
+
+1. 已验证层：仅保证 Forge 1.20.1 helper 模板可直接安装
+2. 扩展层：其他版本或其他 loader 走 prompt-guided helper generation
+
+这意味着未来支持 NeoForge / Fabric 时，优先沉淀生成规则与模板，而不是让 orchestration 层承担过多 loader 细节。
 
 ## 常见失败模式与排障
 

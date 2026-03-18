@@ -24,11 +24,21 @@ DEFAULT_MARKER_PREFIX = "[MC_SMOKE_OK]"
 DEFAULT_MARKER_TIMEOUT_SECONDS = 600.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 60.0
 DEFAULT_LAST_LINES = 60
-SERVER_DONE_PATTERN = r"Done \([^\n]+\)! For help, type \"help\""
+SERVER_DONE_PATTERN = r'Done \([^\n]+\)! For help, type "help"'
 BUILD_FAILED_PATTERN = r"BUILD FAILED"
 SERVER_START_FAILED_PATTERN = r"Failed to start the minecraft server"
 DIRECTORY_LOCK_PATTERN = r"DirectoryLock|另一个程序已锁定文件的一部分"
 EXCEPTION_PATTERN = r"\bFATAL\b|Crash report|A problem occurred|Mixin apply failed"
+FORGE_PLUGIN_PATTERN = r"net\.minecraftforge\.gradle"
+FORGE_MODLOADER_PATTERN = r'modLoader\s*=\s*"javafml"'
+CLASS_PATTERN = re.compile(r"\bclass\s+(?P<name>[A-Za-z_]\w*)\b")
+PACKAGE_PATTERN = re.compile(r"^\s*package\s+(?P<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", re.MULTILINE)
+PROPERTY_PATTERN = re.compile(r"^\s*(?P<key>[A-Za-z0-9_.-]+)\s*=\s*(?P<value>.*?)\s*$")
+HELPER_RELATIVE_PATHS = (
+    Path("src/main/java") / "**" / "smoketest" / "SmokeTestMarkers.java",
+    Path("src/main/java") / "**" / "smoketest" / "ServerSmokeTestHooks.java",
+    Path("src/main/java") / "**" / "smoketest" / "client" / "ClientSmokeTestHooks.java",
+)
 
 
 @dataclass(frozen=True)
@@ -44,10 +54,22 @@ class SmokeTestConfig:
     success_patterns: tuple[Pattern[str], ...]
     failure_patterns: tuple[Pattern[str], ...]
     last_lines: int
+    bootstrap_helper: bool
 
     @property
     def gradle_command(self) -> str:
         return shlex.join(["./gradlew", *self.gradle_args, self.task])
+
+
+@dataclass(frozen=True)
+class ProjectInspection:
+    helper_present: bool
+    missing_helpers: tuple[str, ...]
+    loader: str | None
+    minecraft_version: str | None
+    verified_environment: bool
+    base_package: str | None
+    mod_class: str | None
 
 
 @dataclass
@@ -61,6 +83,10 @@ class SmokeTestResult:
     matched_failure_signal: str | None
     duration_seconds: float
     last_lines: list[str]
+    helper_status: str
+    script_source: str
+    loader: str | None
+    minecraft_version: str | None
 
 
 def compile_patterns(values: Iterable[str]) -> tuple[Pattern[str], ...]:
@@ -99,6 +125,11 @@ def parse_args() -> SmokeTestConfig:
         "--stop-strategy",
         choices=("kill-tree",),
         help="How to stop after success. The current repository uses kill-tree for both server and client.",
+    )
+    parser.add_argument(
+        "--bootstrap-helper",
+        action="store_true",
+        help="If helper files are missing, auto-install verified Forge 1.20.1 helper files before running.",
     )
     parser.add_argument(
         "--marker-timeout-seconds",
@@ -157,6 +188,7 @@ def parse_args() -> SmokeTestConfig:
         success_patterns=success_patterns,
         failure_patterns=failure_patterns,
         last_lines=max(10, args.last_lines),
+        bootstrap_helper=args.bootstrap_helper,
     )
 
 
@@ -165,7 +197,146 @@ def fail(message: str) -> None:
     raise SystemExit(2)
 
 
-def validate_config(config: SmokeTestConfig) -> None:
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def read_text_if_exists(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def parse_gradle_properties(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = PROPERTY_PATTERN.match(raw_line)
+        if match is None:
+            continue
+        values[match.group("key")] = match.group("value")
+    return values
+
+
+def is_valid_java_package(value: str | None) -> bool:
+    if not value:
+        return False
+    parts = value.split(".")
+    return all(part and part.isidentifier() for part in parts)
+
+
+def detect_helper_files(project_root: Path) -> tuple[bool, tuple[str, ...]]:
+    missing: list[str] = []
+    for relative_pattern in HELPER_RELATIVE_PATHS:
+        matches = list(project_root.glob(str(relative_pattern)))
+        if not matches:
+            missing.append(str(relative_pattern).replace("\\", "/"))
+    return not missing, tuple(missing)
+
+
+def detect_loader(project_root: Path) -> str | None:
+    build_gradle = read_text_if_exists(project_root / "build.gradle")
+    mods_toml = read_text_if_exists(project_root / "src/main/resources/META-INF/mods.toml")
+    if re.search(FORGE_PLUGIN_PATTERN, build_gradle) or re.search(FORGE_MODLOADER_PATTERN, mods_toml):
+        return "forge"
+    return None
+
+
+def find_mod_entrypoint(project_root: Path, package_hint: str | None) -> tuple[str | None, str | None]:
+    java_root = project_root / "src/main/java"
+    if not java_root.exists():
+        return None, None
+
+    search_roots: list[Path] = []
+    if package_hint and is_valid_java_package(package_hint):
+        hinted_root = java_root / Path(*package_hint.split("."))
+        if hinted_root.exists():
+            search_roots.append(hinted_root)
+    search_roots.append(java_root)
+
+    seen: set[Path] = set()
+    for search_root in search_roots:
+        for path in search_root.rglob("*.java"):
+            if path in seen:
+                continue
+            seen.add(path)
+            content = read_text_if_exists(path)
+            if "@Mod(" not in content:
+                continue
+            package_match = PACKAGE_PATTERN.search(content)
+            class_match = CLASS_PATTERN.search(content)
+            if package_match and class_match:
+                return package_match.group("name"), class_match.group("name")
+    return None, None
+
+
+def inspect_project(project_root: Path) -> ProjectInspection:
+    properties = parse_gradle_properties(project_root / "gradle.properties")
+    helper_present, missing_helpers = detect_helper_files(project_root)
+    loader = detect_loader(project_root)
+    minecraft_version = properties.get("minecraft_version")
+    verified_environment = loader == "forge" and minecraft_version == "1.20.1"
+
+    base_package = properties.get("mod_group_id")
+    if not is_valid_java_package(base_package):
+        base_package = None
+
+    entry_package, mod_class = find_mod_entrypoint(project_root, base_package)
+    if base_package is None:
+        base_package = entry_package
+
+    return ProjectInspection(
+        helper_present=helper_present,
+        missing_helpers=missing_helpers,
+        loader=loader,
+        minecraft_version=minecraft_version,
+        verified_environment=verified_environment,
+        base_package=base_package,
+        mod_class=mod_class,
+    )
+
+
+def run_helper_bootstrap(project_root: Path, inspection: ProjectInspection) -> ProjectInspection:
+    if inspection.base_package is None or inspection.mod_class is None:
+        fail(
+            "smoke-test helper is missing and automatic bootstrap could not detect base package or mod class; "
+            "verify gradle.properties mod_group_id and the @Mod entrypoint class first"
+        )
+
+    installer_path = repo_root() / "scripts" / "install_forge_smoke_test.py"
+    if not installer_path.exists():
+        fail(f"Forge helper installer not found: {installer_path}")
+
+    command = [
+        sys.executable,
+        str(installer_path),
+        "--target-project",
+        str(project_root),
+        "--base-package",
+        inspection.base_package,
+        "--mod-class",
+        inspection.mod_class,
+        "--global-mode",
+    ]
+    print("[mc-smoke] smoke-test helper missing; bootstrapping verified Forge helper files", flush=True)
+    print(f"[mc-smoke] bootstrap command: {shlex.join(command)}", flush=True)
+    completed = subprocess.run(command, check=False)
+    if completed.returncode != 0:
+        fail(f"helper bootstrap failed with exit code {completed.returncode}")
+
+    refreshed = inspect_project(project_root)
+    if not refreshed.helper_present:
+        missing = ", ".join(refreshed.missing_helpers)
+        fail(f"helper bootstrap completed but helper files are still missing: {missing}")
+    return refreshed
+
+
+def validate_config(config: SmokeTestConfig) -> tuple[ProjectInspection, str]:
     if not config.project_root.exists():
         fail(f"project root does not exist: {config.project_root}")
 
@@ -178,6 +349,26 @@ def validate_config(config: SmokeTestConfig) -> None:
 
     if os.name == "nt" and config.stop_strategy == "kill-tree" and shutil.which("taskkill") is None:
         fail("taskkill executable not found on PATH; Windows kill-tree shutdown requires taskkill")
+
+    inspection = inspect_project(config.project_root)
+    helper_status = "existing"
+    if not inspection.helper_present:
+        missing = ", ".join(inspection.missing_helpers)
+        if not config.bootstrap_helper:
+            fail(
+                "smoke-test helper is missing: "
+                f"{missing}. Re-run with --bootstrap-helper or install helper files first."
+            )
+        if not inspection.verified_environment:
+            fail(
+                "project is not in the verified Forge 1.20.1 MVP support range; "
+                "do not auto-apply the Forge template. Use docs/helper-generation-prompt.md instead."
+            )
+        inspection = run_helper_bootstrap(config.project_root, inspection)
+        helper_status = "installed"
+
+    return inspection, helper_status
+
 
 def create_process(config: SmokeTestConfig) -> subprocess.Popen[str]:
     bash_executable = shutil.which("bash")
@@ -219,6 +410,12 @@ def spawn_output_reader(process: subprocess.Popen[str], output_queue: queue.Queu
 def print_summary(config: SmokeTestConfig, result: SmokeTestResult) -> None:
     print("[mc-smoke] --- summary ---", flush=True)
     print(f"[mc-smoke] project_root={config.project_root}", flush=True)
+    print(f"[mc-smoke] script_source={result.script_source}", flush=True)
+    print(f"[mc-smoke] helper_status={result.helper_status}", flush=True)
+    if result.loader is not None:
+        print(f"[mc-smoke] loader={result.loader}", flush=True)
+    if result.minecraft_version is not None:
+        print(f"[mc-smoke] minecraft_version={result.minecraft_version}", flush=True)
     print(f"[mc-smoke] task={config.task}", flush=True)
     print(f"[mc-smoke] side={config.side}", flush=True)
     print(f"[mc-smoke] marker={config.marker}", flush=True)
@@ -238,7 +435,7 @@ def print_summary(config: SmokeTestConfig, result: SmokeTestResult) -> None:
     if result.last_lines:
         print("[mc-smoke] last_log_lines:", flush=True)
         for line in result.last_lines:
-            print(f"[mc-smoke]   {line}", flush=True)
+            print(f"[mc-smoke]   {safe_console_text(line)}", flush=True)
 
 
 def safe_console_text(value: str) -> str:
@@ -306,7 +503,7 @@ def drain_output(
 
         line = item.rstrip("\r\n")
         lines.append(line)
-        print(line, flush=True)
+        print(safe_console_text(line), flush=True)
 
         if marker in line and not marker_seen:
             marker_seen = True
@@ -330,7 +527,7 @@ def drain_output(
     return marker_seen, matched_success_signal, matched_failure_signal, stream_closed
 
 
-def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
+def run_smoke_test(config: SmokeTestConfig, inspection: ProjectInspection, helper_status: str) -> SmokeTestResult:
     process = create_process(config)
     output_queue: queue.Queue[str | None] = queue.Queue()
     output_reader = spawn_output_reader(process, output_queue)
@@ -386,6 +583,10 @@ def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
                             matched_failure_signal=matched_failure_signal,
                             duration_seconds=duration_seconds,
                             last_lines=list(last_lines),
+                            helper_status=helper_status,
+                            script_source="central",
+                            loader=inspection.loader,
+                            minecraft_version=inspection.minecraft_version,
                         )
 
                     time.sleep(0.2)
@@ -402,6 +603,10 @@ def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
                     matched_failure_signal=matched_failure_signal,
                     duration_seconds=time.monotonic() - start_time,
                     last_lines=list(last_lines),
+                    helper_status=helper_status,
+                    script_source="central",
+                    loader=inspection.loader,
+                    minecraft_version=inspection.minecraft_version,
                 )
 
             if process.poll() is not None:
@@ -418,6 +623,10 @@ def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
                     matched_failure_signal=matched_failure_signal,
                     duration_seconds=time.monotonic() - start_time,
                     last_lines=list(last_lines),
+                    helper_status=helper_status,
+                    script_source="central",
+                    loader=inspection.loader,
+                    minecraft_version=inspection.minecraft_version,
                 )
 
             if time.monotonic() >= deadline:
@@ -433,6 +642,10 @@ def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
                     matched_failure_signal=matched_failure_signal,
                     duration_seconds=time.monotonic() - start_time,
                     last_lines=list(last_lines),
+                    helper_status=helper_status,
+                    script_source="central",
+                    loader=inspection.loader,
+                    minecraft_version=inspection.minecraft_version,
                 )
 
             if stream_closed and not marker_seen:
@@ -446,6 +659,10 @@ def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
                     matched_failure_signal=matched_failure_signal,
                     duration_seconds=time.monotonic() - start_time,
                     last_lines=list(last_lines),
+                    helper_status=helper_status,
+                    script_source="central",
+                    loader=inspection.loader,
+                    minecraft_version=inspection.minecraft_version,
                 )
 
             time.sleep(0.2)
@@ -458,9 +675,8 @@ def run_smoke_test(config: SmokeTestConfig) -> SmokeTestResult:
 
 def main() -> int:
     config = parse_args()
-    validate_config(config)
-
-    result = run_smoke_test(config)
+    inspection, helper_status = validate_config(config)
+    result = run_smoke_test(config, inspection, helper_status)
     print_summary(config, result)
     return 0 if result.success else 1
 
